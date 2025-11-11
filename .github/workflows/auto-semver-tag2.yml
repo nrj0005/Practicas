@@ -1,0 +1,71 @@
+name: Auto SemVer Tag (patch) on main
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [closed]
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+
+    # Ejecutar solo si:
+    # - push directo a main
+    # OR
+    # - PR cerrado (merged=true) con base main
+    if: >
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main')
+
+    steps:
+      - name: Checkout repository (fetch tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine next tag (patch)
+        id: semver
+        run: |
+          set -e
+          latest_tag=$(git tag --list 'v*.*.*' --sort=-v:refname | head -n1 || true)
+          echo "latest_tag=$latest_tag"
+          if [ -z "$latest_tag" ]; then
+            new_tag="v0.1.0"
+          else
+            ver=${latest_tag#v}
+            IFS='.' read -r major minor patch <<< "$ver"
+            patch=$((patch + 1))
+            new_tag="v${major}.${minor}.${patch}"
+          fi
+          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+
+      - name: Create annotated tag and push
+        env:
+          TAG: ${{ steps.semver.outputs.new_tag }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Creating tag $TAG"
+          git tag -a "$TAG" -m "chore(release): $TAG"
+          git push "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}" "refs/tags/$TAG"
+
+      - name: Create Release for tag
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ steps.semver.outputs.new_tag }}
+          release_name: Release ${{ steps.semver.outputs.new_tag }}
+          body: "Automated release for ${{ steps.semver.outputs.new_tag }}"
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
